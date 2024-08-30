@@ -1,0 +1,633 @@
+"""
+-Save State
+-Slash commands
+-Run 24/7
+
+-Working Items and shop system
+-Shared EXP for !hazard
+-!mats (raw material mechanic)
+-!lab (like !shop, but for raw materials instead)
+
+Right now, to call the bot on discord for a cmd, you have to say @botname @my_username !command
+"""
+
+import discord
+
+import random
+import time
+from discord.ext import commands
+import datetime
+import asyncio
+import json
+
+from discord.ext.commands import bot
+
+PLAYER_DATA_FILE = "player_data.json"
+
+release_date = datetime.datetime(2023, 7, 21, 0, 0, 0)
+intents = discord.Intents.default()
+client = commands.Bot(command_prefix='!', intents=intents)
+cooldown_duration = 3600
+
+class Player:
+    def __init__(self, name):
+        self.name = name
+        self.pikmin_count = 0
+        self.message_count = 0
+        self.pikmin_types = {}
+        self.pikmin_order = []
+        self.sort_method = None
+        self.inventory = {}
+
+
+        self.pokos = 0
+        self.raw_materials = 0
+
+    def add_pikmin(self):
+        self.pikmin_count += 1
+        pikmin_type = random.choice(['🔴Red', '🟡Yellow', '🔵Blue', '🟣Purple', '⚪White', '🪨Rock', '🦋Winged', '🧊Ice'])
+        if pikmin_type not in self.pikmin_types:
+            self.pikmin_types[pikmin_type] = 1
+            self.pikmin_order.append(pikmin_type)
+        else:
+            self.pikmin_types[pikmin_type] += 1
+
+    def add_message(self):
+        self.message_count += 1
+        if self.pikmin_count == 0:
+            message_requirement = 5
+        else:
+            message_requirement = 1 * self.pikmin_count + 2 # REMEMBER TO CHANGE BACK TO 5
+
+        if self.message_count >= message_requirement:
+            self.add_pikmin()
+            self.message_count = 0
+            if self.pikmin_count == 1:
+                return f"{self.name}, you have gained your FIRST Pikmin! Check them out with !pikmin."
+            else:
+                return f"{self.name}, you have gained a new Pikmin! Check it out with !pikmin."
+
+    def buy_item(self, item_number):
+        items = {
+            1: {'name': 'Spicy Spray', 'price': 500},
+            2: {'name': 'Bitter Spray', 'price': 700},
+            3: {'name': 'Crimson Candypop Bud', 'price': 100},
+            4: {'name': 'Golden Candypop Bud', 'price': 100},
+            5: {'name': 'Lapis Lazuli Candypop Bud', 'price': 100},
+            6: {'name': 'Violet Candypop Bud', 'price': 100},
+            7: {'name': 'Ivory Candypop Bud', 'price': 100},
+            8: {'name': 'Gray Candypop Bud', 'price': 100},
+            9: {'name': 'Pink Candypop Bud', 'price': 100},
+            10: {'name': 'Queen Candypop Bud', 'price': 600},
+            11: {'name': 'Master Candypop Bud', 'price': 1200},
+            12: {'name': 'Swarm Whistle', 'price': 900},
+            13: {'name': 'Dodge Whistle', 'price': 600},
+            14: {'name': 'Bomb Rock', 'price': 200},
+            15: {'name': 'Jar of Sweet Nectar', 'price': 300}
+        }
+
+        if item_number in items:
+            item_info = items[item_number]
+            if self.pokos >= item_info['price']:
+                self.pokos -= item_info['price']
+                item_name = item_info['name']
+                if item_name in self.inventory:
+                    self.inventory[item_name] += 1
+                else:
+                    self.inventory[item_name] = 1
+                return f"You have successfully bought {item_name}!"
+            else:
+                return "You don't have enough pokos to buy this item."
+        else:
+            return "Invalid item number."
+
+    # Add a method to display the player's inventory
+    def display_inventory(self):
+        if not self.inventory:
+            return "Your inventory is empty."
+        else:
+            response = "Your inventory:\n"
+            for item_name, quantity in self.inventory.items():
+                response += f"{item_name} - {quantity}\n"
+            return response
+
+    def sort_pikmin(self, method):
+        self.sort_method = method
+        if method == "order":
+            self.pikmin_order.sort(key=lambda x: ['🔴Red', '🟡Yellow', '🔵Blue', '🟣Purple', '⚪White', '🪨Rock', '🦋Winged', '🧊Ice'].index(x))
+        elif method == "amount":
+            self.pikmin_order.sort(key=lambda x: self.pikmin_types[x], reverse=True)
+        elif method == "acquired":
+            self.pikmin_order.sort(key=lambda x: list(self.pikmin_types.keys()).index(x))
+
+    def get_pikmin_list(self):
+        if self.sort_method is not None:
+            self.sort_pikmin(self.sort_method)
+        response = f'{self.name}, your Pikmin squad consists of:\n'
+        for pikmin_type in self.pikmin_order:
+            response += f'{pikmin_type} Pikmin - {self.pikmin_types[pikmin_type]}\n'
+        return response
+
+    def get_power(self):
+        power = 0
+        for pikmin_type in self.pikmin_types:
+            count = self.pikmin_types[pikmin_type]
+            if pikmin_type == '🔴Red':
+                power += count * 1.5
+            elif pikmin_type == '🟣Purple':
+                power += count * 2
+            elif pikmin_type == '🦋Winged':
+                power += count * 0.5
+            elif pikmin_type == '🧊Ice':
+                power += count * 0.5
+            else:
+                power += count
+        return power
+
+    def remove_random_pikmin(self):
+        if self.pikmin_order:
+            pikmin_type = random.choice(self.pikmin_order)
+            self.pikmin_types[pikmin_type] -= 1
+            if self.pikmin_types[pikmin_type] == 0:
+                self.pikmin_order.remove(pikmin_type)
+            self.pikmin_count -= 1
+
+    def fight_hazard(self, hazard_type, pikmin_type, pikmin_count):
+        if pikmin_type in self.pikmin_types:
+            pikmin_available = self.pikmin_types[pikmin_type]
+            pikmin_used = min(pikmin_available, pikmin_count)
+            self.pikmin_types[pikmin_type] -= pikmin_used
+            return pikmin_used
+        return 0
+
+
+class Hazard:
+    def __init__(self, hazard_type, players):
+        self.hazard_type = hazard_type
+        self.players = players
+        self.timer = 10  # 60 minutes
+        self.contributions = {}  #Dictionary to store contributions from different users
+
+    async def start_hazard_battle(self, channel):
+        hazard_emojis = {
+            'fire': '🔥',
+            'electricity': '⚡',
+            'water': '💧',
+            'poison': '☠️',
+            'crystal': '💎',
+            'height': '⬆️',
+            'jelly': '🍮'
+        }
+
+        hazard_emoji = hazard_emojis[self.hazard_type]
+
+        embed = discord.Embed(
+            title=f"A {self.hazard_type.capitalize()} hazard has appeared!",
+            description=f"Use the following emoji to send your Pikmin to fight: {hazard_emoji}"
+        )
+
+        self.hazard_message = await channel.send(embed=embed)
+        await self.hazard_message.add_reaction(hazard_emoji)
+
+        def check(reaction, user):
+            return (
+                user != client.user
+                and str(reaction.emoji) == hazard_emoji
+                and reaction.message.id == self.hazard_message.id
+                and user.id in self.players
+            )
+
+        while self.timer > 0:
+            try:
+                reaction, user = await client.wait_for('reaction_add', timeout=600, check=check)
+            except asyncio.TimeoutError:
+                self.timer -= 1
+            else:
+                if str(reaction.emoji) == hazard_emoji:
+                    pikmin_type = {
+                        '🔥': '🔴Red',
+                        '⚡': '🟡Yellow',
+                        '💧': '🔵Blue',
+                        '☠️': '⚪White',
+                        '💎': '🪨Rock',
+                        '⬆️': '🦋Winged',
+                        '🍮': '🧊Ice',
+                    }.get(str(reaction.emoji))
+
+                    pikmin_count = self.players[user.id].pikmin_types.get(pikmin_type, 0)
+                    if pikmin_count >= 1:  # Check if the player has at least 1 Pikmin of the corresponding type
+                        pikmin_used = min(pikmin_count, self.timer // 3)  # calculate the number of pikmin that can attack
+                        self.timer -= 3 * pikmin_used
+
+                        if user.id in self.contributions:
+                            self.contributions[user.id] += pikmin_used
+                        else:
+                            self.contributions[user.id] = pikmin_used
+
+                        await self.hazard_message.edit(
+                            content=f"Sent {pikmin_used} {pikmin_type} Pikmin to fight {self.hazard_type} hazard. Battle in progress."
+                        )
+
+                        while self.timer > 0:
+                            await asyncio.sleep(60)  # 1 minute timer
+                            self.timer -= 1
+                            await self.hazard_message.edit(
+                                content=f"Sent {pikmin_used} {pikmin_type} Pikmin to fight {self.hazard_type} hazard. Battle in progress. Time remaining: {self.timer} minutes."
+                            )
+
+                    else:
+                        await channel.send(f"You don't have any {pikmin_type} Pikmin to fight this hazard!")
+
+        await self.hazard_message.edit(content=f"The {self.hazard_type} hazard has been defeated! You received 5000 pokos.")
+
+        # Reward players
+        reward = 1000
+        for player_id, contribution in self.contributions.items():
+            self.players[player_id].pokos += reward
+
+        self.players = {}
+        self.contributions = {}
+
+# Attempting to save and load player data (as of now, does not work as intended)
+def load_player_data():
+    with open('player_stats.json', 'r') as file:
+        data = json.load(file)
+        player_data = {int(player_id): player_stats for player_id, player_stats in data.items()}
+    return player_data
+
+# Save player data to file
+def save_player_data(player_data):
+    with open(PLAYER_DATA_FILE, "w") as file:
+        json.dump(player_data, file)
+
+# Load player data when the bot starts
+player_data = load_player_data()
+
+
+players = {}
+cooldown_time = 1800  # Cooldown time in seconds (30 min)
+cooldowns = {}  # Initialize the cd dictionary
+active_hazards = {}
+
+@client.event
+async def on_ready():
+    print('Logged in as {0.user}'.format(client))
+    activity = discord.Activity(type=discord.ActivityType.playing, name="Pikmin 4 (Early Access)")
+    await client.change_presence(activity=activity)
+
+@client.event
+async def on_shutdown():
+    # Supposed to save player data when the bot goes offline
+    save_player_data(player_data)
+
+@client.event
+async def on_message(message):
+    if message.author == client.user:
+        return
+
+    author_id = message.author.id
+
+    if author_id not in players:
+        players[author_id] = Player(message.author.name)
+
+    player = players[author_id]
+    new_pikmin_msg = player.add_message()
+    if new_pikmin_msg is not None:
+        await message.channel.send(new_pikmin_msg)
+
+    elif message.content.startswith('!pikmin'):
+        if message.mentions:
+            # Get the first user in the list
+            mentioned_user = message.mentions[0]
+            if mentioned_user.id in players:
+                # If the mentioned user has a player object (i.e. not a BOT) , get their Pikmin list
+                player = players[mentioned_user.id]
+                response = f"{mentioned_user.name}'s Pikmin squad consists of:\n{player.get_pikmin_list()}"
+            else:
+                response = f"{mentioned_user.name} does not have a Pikmin squad yet."
+        else:
+            # If there are no mentioned users, assume the user wants to see their own Pikmin list
+            response = player.get_pikmin_list()
+        await message.channel.send(response)
+
+# Sort by order of RYBPWRWiI
+    elif message.content.startswith('!sort order'):
+        player.sort_pikmin("order")
+        response = player.get_pikmin_list()
+        player.sorted = True
+        await message.channel.send(response)
+# sort by most amount to least amount owned
+    elif message.content.startswith('!sort amount'):
+        player.sort_pikmin("amount")
+        response = player.get_pikmin_list()
+        player.sorted = True
+        await message.channel.send(response)
+# Sort chronologically the ones you acquired
+    elif message.content.startswith('!sort acquired'):
+        player.sort_pikmin("acquired")
+        response = player.get_pikmin_list()
+        player.sorted = True
+        await message.channel.send(response)
+
+    elif message.content.startswith('!power'):
+        power = player.get_power()
+        response = f'{player.name}, your Pikmin squad has a total attack power of {power}.'
+        await message.channel.send(response)
+
+    elif message.content.startswith('!countdown'):
+        time_until_release = release_date - datetime.datetime.now()
+        days = time_until_release.days
+        hours, remainder = divmod(time_until_release.seconds, 3600)
+        minutes, _ = divmod(remainder, 60)
+        response = f"Pikmin 4 will be released in {days} days, {hours} hours, and {minutes} minutes."
+        await message.channel.send(response)
+
+    elif message.content.startswith('!breadbug'):  #  BREADBUG ARMY
+        await message.channel.send('Breadbug Supremacy.')
+
+    elif message.content.startswith('!poko'):
+        if message.mentions:
+            mentioned_user = message.mentions[0]
+            if mentioned_user.id in players:
+                player = players[mentioned_user.id]
+                response = f"{mentioned_user.name} has {player.pokos} pokos."
+            else:
+                response = f"{mentioned_user.name} does not have any pokos yet."
+        else:
+            # Same, if there are no mentioned users, assume the user wants to see their own pokos
+            player = players[author_id]
+            response = f"{player.name}, you have {player.pokos} pokos."
+        await message.channel.send(response)
+
+    elif message.content.startswith('!mats'):
+        if message.mentions:
+            mentioned_user = message.mentions[0]
+            if mentioned_user.id in players:
+                player = players[mentioned_user.id]
+                response = f"{message.author.name} has {player.raw_materials} raw materials."
+            else:
+                response = f"{mentioned_user.name} does not have any materialsy yet."
+        else:
+            # Again, if there are no mentioned users, assume the user wants to see their own materials
+            player = players[author_id]
+            response = f"{player.name}, you have {player.pokos} pokos."
+        await message.channel.send(response)
+
+    elif message.content.startswith('!profile'):
+
+        # Extract the mentioned user
+
+        mentioned_user = message.mentions[0] if message.mentions else message.author
+
+        # Check if the mentioned user is a player not a bot
+
+        if mentioned_user.id in players:
+
+            player = players[mentioned_user.id]
+
+            # Retrieve player's attributes
+
+            username = mentioned_user.name
+
+            # Create an embed with the players information and stats
+
+            embed = discord.Embed(title="Profile", color=discord.Color.blue())
+
+            embed.add_field(name="Username", value=username, inline=False)
+
+            embed.add_field(name="Total Pikmin Amount", value=player.pikmin_count, inline=False)
+
+            embed.add_field(name="Total Attack Power", value=player.get_power(), inline=False)
+            embed.add_field(name="Total Poko Count", value=player.pokos, inline=False)
+            # Set the user's profile picture as the thumbnail
+
+            embed.set_thumbnail(url=mentioned_user.avatar.url)
+            await message.channel.send(embed=embed)
+
+        else:
+
+            await message.channel.send("The mentioned user doesn't have a player profile.")
+
+    elif message.content.startswith('!hazard'):
+        hazard_type = message.content.split()[1].lower()
+
+        valid_hazard_types = ['fire', 'electricity', 'water', 'poison', 'crystal', 'height', 'jelly']
+        if hazard_type in valid_hazard_types:
+            # Check if the hazard type already exists in active_hazards
+            if hazard_type in active_hazards:
+                await message.channel.send("A hazard of that type is already active.")
+            else:
+                hazard = Hazard(hazard_type, players)
+                active_hazards[hazard_type] = hazard
+                await hazard.start_hazard_battle(message.channel)
+                del active_hazards[hazard_type]
+        else:
+            await message.channel.send(
+                "Invalid hazard type. Please choose from: Fire, Electricity, Water, Poison, Crystal, Height, Jelly")
+
+    elif message.content.startswith('!explore'):
+        pikmin_count = player.pikmin_count
+
+        # Check if the user is on cooldown
+        if pikmin_count == 0:
+            await message.channel.send("You have no pikmin in your squad.")
+        elif message.author.id in cooldowns and (time.time() - cooldowns[message.author.id]) < cooldown_time:
+            remaining_cooldown = int((cooldown_time - (time.time() - cooldowns[message.author.id])) / 60)
+            await message.channel.send(
+                f"{message.author.mention}, you are on cooldown. Please wait {remaining_cooldown} minutes before exploring again.")
+            return
+        else:
+            items = {
+                'Disposable Scrap': 30,
+                'Diminutive Treasure': 100,
+                'Moderate Fortune': 500,
+                'Trove of Riches': 1500
+            }
+
+            # Calculate the chance of obtaining each item based on the number of pikmin in the squad
+            chances = [0.6, 0.3, 0.09, 0.01]  # Chance percentages for each item in descending order
+
+            # Calculate the total chances based on pikmin count
+            total_chances = [chance * pikmin_count for chance in chances]
+
+            # Randomly select an item based on the chances
+            item = random.choices(list(items.keys()), weights=total_chances, k=1)[0]
+            pokos = items[item]
+
+            # Add the cooldown for the user
+            cooldowns[message.author.id] = time.time()
+
+            await message.channel.send(f"{message.author.mention}, your pikmin are on an expedition...")
+
+            await asyncio.sleep(5 * 60)  # Wait for 5 minutes (300 seconds)
+
+            await message.channel.send(f"{message.author.mention}, your pikmin have returned from the expedition!")
+            await message.channel.send(f"They found a '{item}' and you received {pokos} pokos.")
+
+            # Give the player the pokos  reward
+            player.pokos += pokos
+            cooldowns[message.author.id] = time.time()
+
+    elif message.content.startswith('!fight'):
+
+        current_time = time.time()
+
+        # Check if the player is still in cooldown period
+
+        if hasattr(player, 'fight_cooldown') and current_time - player.fight_cooldown < cooldown_duration:
+
+            remaining_cooldown = int(cooldown_duration - (current_time - player.fight_cooldown))
+
+            minutes, seconds = divmod(remaining_cooldown, 60)
+
+            response = f"You must wait {minutes} minutes and {seconds} seconds before the next fight is available."
+
+            await message.channel.send(response)
+
+        else:
+
+            try:
+                # Extract the enemy's level from the user's command
+                enemy_level = int(message.content.split()[1])
+                # Define the enemy's power levels for each level (i.e. level 1 is 15 power)
+                enemy_power_levels = {
+
+                    1: 15,
+
+                    2: 30,
+
+                    3: 45,
+
+                    4: 60,
+
+                    5: 75,
+
+                    6: 90,
+
+                    7: 105,
+
+                    8: 120,
+
+                    9: 135,
+
+                    10: 250
+
+                }
+
+                # Get the player's power level
+                player_power = player.get_power()
+                if enemy_level < 1 or enemy_level > 10:
+                    response = "Invalid enemy level. Please choose a number between 1 and 10."
+                else:
+                    enemy_power = enemy_power_levels[enemy_level]
+                    # Calculating your power relative to the selected enemy's power
+                    relative_power = player_power / enemy_power
+
+                    if relative_power >= 1.0:  # Player power is equal to or greater than enemy power
+                        # Player wins the battle
+                        reward = enemy_power * 50
+                        player.pokos += reward
+                        response = f"Congratulations! Your Pikmin defeated the enemy at level {enemy_level} with a power level of {enemy_power}. You earned {reward} pokos."
+
+                    elif relative_power >= 0.7:  # Player power is between 70% and 99% of enemy power
+                        # Player has a 50% chance to win
+                        random_chance = random.random()  # Generate a random number between 0 and 1
+                        if random_chance <= 0.5:
+                            reward = enemy_power * 50
+                            player.pokos += reward
+                            response = f"Congratulations! Your Pikmin defeated the enemy at level {enemy_level} with a power level of {enemy_power}. You earned {reward} pokos."
+                        else:
+                            # Player loses the battle and removes a random Pikmin
+                            player.remove_random_pikmin()
+                            response = f"Your Pikmin were defeated by the enemy at level {enemy_level} with a power level of {enemy_power}. Better luck next time!\nA random pikmin died!"
+                    else:  # Player power is less than 70% of enemy power
+
+                        # Player loses the battle and removes a random Pikmin
+
+                        player.remove_random_pikmin()
+
+                        response = f"Your Pikmin were defeated by the enemy at level {enemy_level} with a power level of {enemy_power}. Better luck next time!\nA random pikmin died!"
+                    # Set the cooldown time to the current time
+                    player.fight_cooldown = current_time
+                    await message.channel.send(response)
+
+            except ValueError:
+                response = "Invalid enemy level. Please choose a number between 1 and 10."
+                await message.channel.send(response)
+
+    elif message.content.startswith('!shop'):
+        items = {
+            1: {'name': 'Spicy Spray', 'price': 500},
+            2: {'name': 'Bitter Spray', 'price': 700},
+            3: {'name': 'Crimson Candypop Bud', 'price': 100},
+            4: {'name': 'Golden Candypop Bud', 'price': 100},
+            5: {'name': 'Lapis Lazuli Candypop Bud', 'price': 100},
+            6: {'name': 'Violet Candypop Bud', 'price': 100},
+            7: {'name': 'Ivory Candypop Bud', 'price': 100},
+            8: {'name': 'Gray Candypop Bud', 'price': 100},
+            9: {'name': 'Pink Candypop Bud', 'price': 100},
+            10: {'name': 'Queen Candypop Bud', 'price': 600},
+            11: {'name': 'Master Candypop Bud', 'price': 1200},
+            12: {'name': 'Swarm Whistle', 'price': 900},
+            13: {'name': 'Dodge Whistle', 'price': 600},
+            14: {'name': 'Bomb Rock', 'price': 200},
+            15: {'name': 'Jar of Sweet Nectar', 'price': 300}
+        }
+
+        shop_embed = discord.Embed(title='Pikmin Adventure Shop', description='Items for Sale')
+        for item_number, item_info in items.items():
+            shop_embed.add_field(name=f"{item_number}. {item_info['name']}", value=f"Price: {item_info['price']} Pokos",
+                                 inline=False)
+
+        await message.channel.send(embed=shop_embed)
+
+    elif message.content.startswith('!buy'):
+        try:
+            item_number = int(message.content.split()[1])
+            response = player.buy_item(item_number)
+        except IndexError:
+            response = "Please provide the item number you want to buy."
+        except ValueError:
+            response = "Invalid item number. Please provide a valid number."
+
+        await message.channel.send(response)
+
+    elif message.content.startswith('!inventory'):
+        response = player.display_inventory()
+        await message.channel.send(response)
+
+
+    elif message.content.startswith('!about'):
+        response = f"hey Hey HEY! Welcome to this Pikmin Adventure bot! Developed by OodlesOfNoodles, this bot brings to you fun features all about the pikmin franchise!"\
+        " Create and expand your Pikmin squad, using them to perform tasks for you, and earn you some sweet sweet cash. Try typing some messages, and see what you will get.."\
+        "\nA little about this bot, it was created with inspiration to the pikmin series, especially the not-so-officially regarded Pikmin Bloom, which I felt fit the discord bot format very well."\
+        " Reminder that I don't own anything about Pikmin, as it is a property of Nintendo. I hope you have fun with it! Don't forget to check out all the different commands using !help.\n" \
+        "\nNOTES :" \
+        "\n• Reminder that I am still new, and this is my first legitimate 'application development', so it can/will be buggy/glitchy/impractical etc., but I'm always looking to improve so lmk if there's something you want changed"\
+        "\n• After many desperate attempts, I could not figure out how to implement the discord SLASH command feature, so for now to do a command you have to make sure your message STARTS with the command, and ends with @PikBot"\
+        "\n• I also haven't managed to figure out a file save function yet, so if the bot ever crashes all progress is lost but that's okay because I'll give you whatever you lost anyways"\
+        "\n• The SHOP currently doesn't do anything, that is a WIP coming soon where you can expend your hoarded Pokos, loaded with cool items" \
+        "\n• The more pikmin you have, the longer it takes until you get your next one, just as an FYI"\
+        "\n• If you do a command on the same message that would have granted you a pikmin, then it will ignore the command unfortunately. Just type it in again."
+        await message.channel.send(response)
+
+    elif message.content.startswith('!help'):
+        response = f"Here are the available commands:\n" \
+                   f"!pikmin @username - Check the number and types of Pikmin in your squad\n" \
+                   f"!sort order - Sort your Pikmin squad in order [R Y B P W Ro Wi]\n" \
+                   f"!sort amount - Sort your Pikmin squad by the amount of each type\n" \
+                   f"!sort acquired - Sort your Pikmin squad by the order of acquisition\n" \
+                   f"!power - Check the total attack power of your Pikmin squad\n" \
+                   f"!countdown - See the time remaining until the release of Pikmin 4\n" \
+                   f"!breadbug - Show your allegiance to the Breadbug\n" \
+                   f"!profile @username- Displays a user's profile\n" \
+                   f"!poko @username - Check the number of pokos of another user\n" \
+                   f"!hazard hazard_type - Engage in a hazard battle with the specified hazard type\n" \
+                   f"!explore - Send your pikmin on a short expedition, who knows what you might find?\n" \
+                   f"!fight 1-10 - Deploy your squad for combat, but there is a risk\n" \
+                   f"!shop - A list of items to choose from and purchase\n" \
+                   f"!about - Explains a bit about the bot + dev notes\n" \
+                   f"!help - Show this help message"
+        await message.channel.send(response)
+
+client.run('TOKEN')
